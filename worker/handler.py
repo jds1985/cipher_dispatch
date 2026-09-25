@@ -53,5 +53,5 @@ def handler(job):
 
     return process_call_turn(transcript, trade_context)
 
-if __name__ == "__main__":
+if ___name__ == "__main__":
     runpod.serverless.start({"handler": handler})
