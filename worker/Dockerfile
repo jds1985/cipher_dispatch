@@ -10,9 +10,11 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     git \
     && rm -rf /var/lib/apt/lists/*
 
-COPY requirements.txt .
+COPY worker/requirements.txt requirements.txt
 RUN pip install --no-cache-dir -r requirements.txt
 
-COPY . .
+# Copy core logic and worker entrypoint
+COPY core/ /app/core/
+COPY worker/handler.py /app/handler.py
 
-CMD ["python", "-u", "handler.py"]
+CMD ["python3", "-u", "handler.py"]
