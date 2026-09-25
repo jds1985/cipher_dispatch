@@ -3,10 +3,14 @@ import json
 import base64
 from fastapi import FastAPI, WebSocket, Request, Response
 from dotenv import load_dotenv
+from gateway.session_manager import get_or_create_session, close_session
+from gateway.runpod_client import query_runpod_worker
+from integrations.twilio_sms import send_tech_dispatch_sms
 
 load_dotenv()
 
 app = FastAPI()
+TECH_PHONE = os.getenv("TEST_TECH_PHONE")
 
 @app.get("/")
 async def root():
@@ -17,7 +21,7 @@ async def voice_handler(request: Request):
     host = request.headers.get("host")
     twiml_response = f"""<?xml version="1.0" encoding="UTF-8"?>
 <Response>
-    <Say>Thank you for calling emergency dispatch. Connecting your line now.</Say>
+    <Say voice="Polly.Matthew">Thanks for calling emergency dispatch. Please describe your issue.</Say>
     <Connect>
         <Stream url="wss://{host}/media-stream" />
     </Connect>
@@ -27,7 +31,9 @@ async def voice_handler(request: Request):
 @app.websocket("/media-stream")
 async def media_stream_handler(websocket: WebSocket):
     await websocket.accept()
-    print("[Gateway] Twilio Media Stream connected.")
+    print("[Gateway] Live call stream connected.")
+    session = None
+
     try:
         while True:
             message = await websocket.receive_text()
@@ -35,13 +41,26 @@ async def media_stream_handler(websocket: WebSocket):
             event = data.get("event")
 
             if event == "start":
-                print(f"[Gateway] Call started: {data['start']['streamSid']}")
+                stream_sid = data["start"]["streamSid"]
+                call_sid = data["start"]["callSid"]
+                session = get_or_create_session(stream_sid, call_sid)
+                print(f"[Gateway] Call started: {stream_sid}")
+
             elif event == "media":
-                pass  # Audio payload arrives here
+                if session:
+                    # Accumulate incoming audio bytes
+                    chunk = base64.b64decode(data["media"]["payload"])
+                    session.append_audio(chunk)
+
             elif event == "stop":
-                print("[Gateway] Call ended.")
+                if session:
+                    print(f"[Gateway] Call ended. Dispatched ticket summary.")
+                    if TECH_PHONE:
+                        send_tech_dispatch_sms(TECH_PHONE, session.ticket)
+                    close_session(session.stream_sid)
                 break
+
     except Exception as e:
-        print(f"[Gateway] Stream error: {e}")
+        print(f"[Gateway] Streaming exception: {e}")
     finally:
-        print("[Gateway] Stream closed.")
+        print("[Gateway] Stream connection closed.")
