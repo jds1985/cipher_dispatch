@@ -1,5 +1,5 @@
 import os
-import json
+import sys
 import base64
 import tempfile
 import runpod
@@ -10,50 +10,32 @@ from core.profile_loader import load_trade_profile
 # 1. Load Whisper Model onto GPU (falls back to CPU if testing without CUDA)
 device = "cuda" if os.getenv("CUDA_VISIBLE_DEVICES") else "cpu"
 compute_type = "float16" if device == "cuda" else "int8"
-
 print(f"[Worker] Loading Faster-Whisper on {device} ({compute_type})...")
 model = WhisperModel("base.en", device=device, compute_type=compute_type)
 print("[Worker] Audio engine ready.")
 
 def transcribe_audio_payload(audio_b64: str) -> str:
-    """Decodes base64 μ-law/wav and extracts transcript using Whisper."""
+    """Decodes base64 audio and extracts transcript using Whisper."""
     try:
         audio_bytes = base64.b64decode(audio_b64)
         with tempfile.NamedTemporaryFile(suffix=".wav", delete=True) as temp_audio:
             temp_audio.write(audio_bytes)
             temp_audio.flush()
-            
-            segments, _ = model.transcribe(temp_audio.name, beam_size=1)
-            text = " ".join([segment.text for segment in segments]).strip()
-            return text
+            segments, _ = model.transcribe(temp_audio.name, beam_size=5)
+            transcript = " ".join([segment.text for segment in segments]).strip()
+            return transcript
     except Exception as e:
-        print(f"[Worker STT Error] {e}")
+        print(f"[Worker Error] Transcription failed: {e}")
         return ""
 
-def process_call_turn(transcript: str, trade_context: str) -> dict:
-    """
-    Evaluates transcript using trade configuration and triage rules.
-    """
+def process_call_turn(transcript: str, trade_context: str = "hvac") -> dict:
     profile = load_trade_profile(trade_context)
-    
-    # Assess emergency criteria using the triage rules engine
-    triage = evaluate_emergency(
-        symptoms=[transcript],
-        equipment_type="general",
-        indoor_temp=None
-    )
-    
-    # Basic conversational response heuristic
-    if triage["urgency"] == "emergency":
-        reply = "I understand this is an urgent situation. I'm tagging an emergency technician right now. Are you in a safe area?"
-    else:
-        reply = "Got it. I've noted those details. Could you please confirm your service address?"
-        
+    triage = evaluate_emergency(transcript, trade_context)
+    reply_text = f"Thanks for calling. We noted: '{transcript}'. Let us get an emergency technician dispatched right away." if triage["urgency"] == "critical" else f"Thanks for reaching out about {trade_context}. We have logged your request."
     return {
         "transcript": transcript,
-        "reply_text": reply,
-        "triage": triage,
-        "trade": trade_context
+        "reply_text": reply_text,
+        "triage": triage
     }
 
 def handler(job):
